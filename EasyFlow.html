@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>EasyFlow</title>
+  <style>
+    /* Basic Styling */
+    html, body { height: 100%; margin: 0; font-family: sans-serif; }
+    body { display: flex; flex-direction: column; }
+    #controls { padding: 10px; background-color: #f0f0f0; border-bottom: 1px solid #ccc; display: flex; flex-wrap: nowrap; gap: 5%; }
+    #editorArea { flex-grow: 1; display: flex; min-height: 500px; } /* Increased min-height slightly */
+    #blocklyDiv { flex: 1; height: 100%; }
+    #controls > img, button{
+      cursor: pointer;
+    }
+    /* --- Styles for the Right Panel (Generated Code + Console) --- */
+    #rightPanel {
+        width: 40%;
+        height: 100%;
+        border-left: 1px solid #ccc;
+        background-color: #f5f5f5;
+        padding: 10px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+    }
+
+    #generatedCodeArea {
+        display: flex;
+        flex-direction: column;
+        flex: 1; 
+        min-height: 200px; 
+        margin-bottom: 10px;
+    }
+    #generatedCodeArea h3 { margin-top: 0; margin-bottom: 5px; }
+    #generatedCode {
+        flex-grow: 1;
+        width: 100%;
+        box-sizing: border-box;
+        white-space: pre-wrap;
+        font-family: monospace;
+        background-color: #fff;
+        border: 1px solid #ddd;
+        overflow: auto;
+    }
+
+    /* --- Styles for Console Area --- */
+    #consoleArea { 
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 150px;
+    }
+    #consoleArea h3 { margin-top: 0; margin-bottom: 5px; }
+    #pythonConsoleOutput {
+        flex-grow: 1;
+        width: 100%;
+        box-sizing: border-box;
+        white-space: pre-wrap;
+        font-family: monospace;
+        background-color: #e8e8e8;
+        border: 1px solid #ccc;
+        overflow: auto;
+        padding: 5px;
+        color: #333;
+    }
+  </style>
+
+  <!-- Load Libraries -->
+  <script src="https://unpkg.com/blockly/blockly.min.js"></script>
+  <script src="https://unpkg.com/blockly/python_compressed.js"></script>
+  <script src="https://unpkg.com/blockly/msg/en.js"></script>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+  <script src="/pyodide.js"></script>
+  
+</head>
+<body>
+  <div id="controls">
+    <img id="saveButton" src="/icons/save.svg" style="margin-left: 10px;">
+    <button id="clearConsoleButton" style="margin-left: 10px;">Clear Console</button>
+    <div class="separator" style="width: 70%;"></div>
+    <img id="drawTheGraph" onclick="draw();" src="/icons/check.svg">
+    <img id="generateButton" src="/icons/play.svg" style="right: 0;"> 
+  </div>
+
+  <div id="editorArea">
+    <div id="blocklyDiv"></div>
+
+    <div id="rightPanel">
+        <div id="generatedCodeArea">
+          <h3>Generated Python:</h3>
+          <textarea id="generatedCode" readonly></textarea>
+        </div>
+
+        
+        <div id="consoleArea">
+          <h3>Python Console Output:</h3>
+          <textarea id="pythonConsoleOutput" readonly></textarea>
+        </div>
+    </div>
+
+  </div>
+
+  <!-- Toolbox XML -->
+  <xml xmlns="https://developers.google.com/blockly/xml" id="toolbox" style="display: none">
+    <category name="Logic" colour="%{BKY_LOGIC_HUE}">
+      <block type="controls_if"></block>
+      <block type="logic_compare"></block>
+      <block type="logic_operation"></block>
+      <block type="logic_negate"></block>
+      <block type="logic_boolean"></block>
+    </category>
+    <category name="Loops" colour="%{BKY_LOOPS_HUE}">
+      <block type="controls_repeat_ext">
+        <value name="TIMES"><shadow type="math_number"><field name="NUM">10</field></shadow></value>
+      </block>
+      <block type="controls_whileUntil"></block>
+    </category>
+     <category name="Math" colour="%{BKY_MATH_HUE}">
+      <block type="math_number"><field name="NUM">0</field></block>
+      <block type="math_arithmetic">
+          <value name="A"><shadow type="math_number"><field name="NUM">1</field></shadow></value>
+          <value name="B"><shadow type="math_number"><field name="NUM">1</field></shadow></value>
+      </block>
+    </category>
+    <category name="Text" colour="%{BKY_TEXTS_HUE}">
+      <block type="text"></block>
+      <block type="text_print">
+          <value name="TEXT"><shadow type="text"><field name="TEXT">abc</field></shadow></value>
+      </block>
+    </category>
+    <category name="Variables" colour="%{BKY_VARIABLES_HUE}" custom="VARIABLE"></category>
+  </xml>
+
+  <script>
+    let neededCode = "";
+
+    // --- Initialize Blockly ---
+    const blocklyDiv = document.getElementById('blocklyDiv');
+    const toolboxXml = document.getElementById('toolbox');
+    const workspace = Blockly.inject(blocklyDiv, {
+      toolbox: toolboxXml,
+      grid: { spacing: 20, length: 3, colour: '#ccc', snap: true },
+      trashcan: true,
+      zoom: { controls: true, wheel: true, startScale: 1.0 }
+    });
+
+    // --- Get DOM Elements ---
+    const generateButton = document.getElementById('generateButton');
+    const saveButton = document.getElementById('saveButton');
+    const clearConsoleButton = document.getElementById('clearConsoleButton'); // Get clear button
+    const generatedCodeArea = document.getElementById('generatedCode');
+    const consoleOutputArea = document.getElementById('pythonConsoleOutput'); // Get console output area
+
+    // --- Pyodide Instance (Load Once) ---
+    let pyodideInstance = null;
+
+    async function loadPyodideOnce() {
+        if (!pyodideInstance) {
+            appendToConsole("Loading Pyodide runtime...");
+            console.log("Loading Pyodide runtime...");
+            try {
+                pyodideInstance = await loadPyodide();
+                appendToConsole("Pyodide loaded successfully.");
+                console.log("Pyodide loaded successfully.");
+            } catch (error) {
+                appendToConsole(`Error loading Pyodide: ${error.message}`);
+                console.error("Error loading Pyodide:", error);
+                pyodideInstance = null;
+            }
+        }
+        return pyodideInstance;
+    }
+
+    // --- Helper to Append to Console ---
+    function appendToConsole(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        consoleOutputArea.value += `[${timestamp}] ${message}\n`;
+        consoleOutputArea.scrollTop = consoleOutputArea.scrollHeight;
+    }
+
+    // --- Function to run Python code using Pyodide ---
+    async function runPythonCode(code) {
+        const pyodide = await loadPyodideOnce(); // Ensure Pyodide is loaded
+        if (!pyodide) {
+            appendToConsole("Pyodide is not available. Cannot run code.");
+            return;
+        }
+
+        appendToConsole("Running Python code...");
+        console.log("Running Python code:\n", code);
+
+        try {
+            // Redirect Python's print statements to our console
+            pyodide.runPython(`
+                import sys
+                import io
+                sys.stdout = io.StringIO()
+                sys.stderr = io.StringIO()
+            `);
+
+            // Execute the generated code.
+            pyodide.runPython(code);
+
+            // Get anything printed to stdout/stderr during execution
+            let stdout = pyodide.runPython("sys.stdout.getvalue()");
+            let stderr = pyodide.runPython("sys.stderr.getvalue()");
+
+            if (stdout) {
+                appendToConsole(`--- Python Output ---\n${stdout.trimEnd()}`);
+            }
+            if (stderr) {
+                 appendToConsole(`--- Python Error Output ---\n${stderr.trimEnd()}`);
+            }
+
+            if (code.trim() && !stderr) {
+               appendToConsole("--- Python Execution Finished ---");
+            }
+
+        } catch (e) {
+            console.error("Error executing Python:", e); // Log full error to browser console
+            appendToConsole(`!!! Python Execution Error: ${e.message}`); // Show error in our console
+        }
+    }
+
+
+    // --- Function to generate Python code, display it, and run it ---
+    function generateAndRunPython() {
+        console.log("Generate & Run Python button clicked.");
+        Blockly.Python.INFINITE_LOOP_TRAP = null;
+
+        try {
+            const code = Blockly.Python.workspaceToCode(workspace);
+            console.log("Python code generation successful.");
+            generatedCodeArea.value = code; // Display generated code
+
+            neededCode = code;
+            runExample(code); // <---------------------------------------
+
+            // Check if code is empty before running
+            if (code.trim() === "") {
+                appendToConsole("Generated code is empty. Nothing to run.");
+            } else {
+                runPythonCode(code); // Run the generated code
+            }
+            return code; // Return code for saving function
+        } catch (e) {
+            console.error("Code generation failed:", e);
+            generatedCodeArea.value = `# Code Generation Error:\n# ${e}`;
+            appendToConsole(`!!! Code Generation Error: ${e.message}`);
+            alert(`Error during code generation: ${e.message}\nCheck browser console (F12) for details.`);
+            return null;
+        }
+    }
+
+    // --- Function to trigger file download ---
+    function savePythonToFile() {
+        console.log("Save button clicked.");
+        // Generate the code first to ensure it's up-to-date (but don't run it again)
+         let code;
+         try {
+            code = Blockly.Python.workspaceToCode(workspace);
+            generatedCodeArea.value = code; // Update text area just in case
+         } catch (e) {
+            console.error("Code generation failed for saving:", e);
+            alert(`Error during code generation for saving: ${e.message}`);
+            return;
+         }
+
+        // Check if generation produced code
+        if (code === null || code.trim() === "") {
+            alert("No code generated to save.");
+            return;
+        }
+
+        // Create Blob and trigger download
+        const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'Output.txt');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        console.log("Download initiated for Output.txt");
+        appendToConsole("Python code saved to Output.txt");
+    }
+
+    // --- Event Listeners ---
+    generateButton.onclick = generateAndRunPython;
+    saveButton.onclick = savePythonToFile;
+    clearConsoleButton.onclick = () => { // Clear the console textarea
+        consoleOutputArea.value = "";
+        console.log("Console cleared.");
+        appendToConsole("Console cleared."); // Also log clearing to the console itself
+    };
+
+    console.log("Standard Blockly Blocks to Python setup complete with console.");
+    appendToConsole("Ready. Use Blockly blocks and click 'Generate & Run Python'.");
+    loadPyodideOnce(); // Start loading Pyodide in the background
+
+    
+  </script>
+
+<div class="diagram diagram1" id ="diagram" style="
+  position: absolute; 
+  z-index: 1000 !important;
+  border: 1px solid #333;
+  cursor: move;
+  background: url('/image.png');
+  background-size: cover;
+  top: 5em;
+  width: 560px;
+  height: 520px;
+  color: #fff;
+  resize: both;
+  /* display: none; */
+">
+  <span style="
+    font-size: 28px; 
+    width: 50px; 
+    height: 50px; 
+    color: red; 
+    margin: 8px;
+    cursor: pointer;
+    " 
+    onclick="hideDiagram();">X
+  </span>
+</div> 
+<script src="raphael-min.js"></script>
+<script src="flowchart-latest.js"></script>
+<script>
+
+const diagramBox = document.getElementById("diagram")
+
+dragElement(document.getElementById("diagram"));
+
+function hideDiagram() {
+  diagramBox.style.display = "none";
+}
+
+function dragElement(elmnt) {
+  var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+  if (document.getElementById(elmnt.id + "header")) {
+    // if present, the header is where you move the DIV from:
+    document.getElementById(elmnt.id + "header").onmousedown = dragMouseDown;
+  } else {
+    // otherwise, move the DIV from anywhere inside the DIV:
+    elmnt.onmousedown = dragMouseDown;
+  }
+
+  function dragMouseDown(e) {
+    e = e || window.event;
+    e.preventDefault();
+    // get the mouse cursor position at startup:
+    pos3 = e.clientX;
+    pos4 = e.clientY;
+    document.onmouseup = closeDragElement;
+    // call a function whenever the cursor moves:
+    document.onmousemove = elementDrag;
+  }
+
+  function elementDrag(e) {
+    e = e || window.event;
+    e.preventDefault();
+    // calculate the new cursor position:
+    pos1 = pos3 - e.clientX;
+    pos2 = pos4 - e.clientY;
+    pos3 = e.clientX;
+    pos4 = e.clientY;
+    // set the element's new position:
+    elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+    elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+  }
+
+  function closeDragElement() {
+    // stop moving when mouse button is released:
+    document.onmouseup = null;
+    document.onmousemove = null;
+  }
+}
+
+function draw() {
+
+  const flowchartCode = runExample(neededCode);
+  var diagram = flowchart.parse(flowchartCode);
+
+  diagramBox.style.display = "block";
+  diagramBox.drawSVG('diagram');
+
+}
+
+</script>
+
+</body>
+</html>
